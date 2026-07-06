@@ -1,9 +1,9 @@
 """
 Prédiction du churn client (Telco) — application Streamlit.
 
-Charge le pipeline entraîné (voir src/train_model.py), prédit la probabilité de
-résiliation d'un client, met en évidence les facteurs de risque et propose une
-action de rétention.
+Le modèle (pipeline Random Forest) est entraîné au démarrage puis mis en cache :
+aucun fichier modèle à charger, aucune dépendance lourde au runtime. L'étude
+complète (XGBoost tuné, SMOTE, seuil) est dans src/train_model.py.
 
 Lancement : streamlit run streamlit_app.py
 """
@@ -11,45 +11,75 @@ Lancement : streamlit run streamlit_app.py
 import os
 import json
 
+import numpy as np
 import pandas as pd
-import joblib
 import streamlit as st
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score, precision_recall_curve
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.join(ROOT, "data", "processed", "telco_customer_churn_clean.csv")
 MODELS_DIR = os.path.join(ROOT, "models")
 REPORTS_DIR = os.path.join(ROOT, "reports")
 
 st.set_page_config(page_title="Prédiction de churn", page_icon="📉", layout="wide")
 
+NUMERIC = ["tenure", "MonthlyCharges", "TotalCharges", "SeniorCitizen"]
+
 
 @st.cache_resource
-def load_artifacts():
-    model = joblib.load(os.path.join(MODELS_DIR, "churn_model.joblib"))
-    with open(os.path.join(MODELS_DIR, "feature_schema.json"), encoding="utf-8") as f:
-        schema = json.load(f)
-    metrics = {}
-    mpath = os.path.join(MODELS_DIR, "metrics.json")
-    if os.path.exists(mpath):
-        with open(mpath, encoding="utf-8") as f:
-            metrics = json.load(f)
-    return model, schema, metrics
+def train():
+    df = pd.read_csv(DATA)
+    df = df.drop(columns=[c for c in ["customerID"] if c in df.columns])
+    y = (df["Churn"] == "Yes").astype(int)
+    X = df.drop(columns=["Churn"])
+    numeric = [c for c in NUMERIC if c in X.columns]
+    categorical = [c for c in X.columns if c not in numeric]
+    pre = ColumnTransformer([
+        ("num", StandardScaler(), numeric),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical),
+    ])
+    model = Pipeline([
+        ("pre", pre),
+        ("clf", RandomForestClassifier(n_estimators=400, max_depth=8, min_samples_leaf=5,
+                                       class_weight="balanced", random_state=42, n_jobs=-1)),
+    ])
+    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
+    model.fit(X_tr, y_tr)
+    proba = model.predict_proba(X_te)[:, 1]
+    auc = float(roc_auc_score(y_te, proba))
+    prec, rec, thr = precision_recall_curve(y_te, proba)
+    f1s = 2 * prec * rec / (prec + rec + 1e-9)
+    threshold = float(thr[int(np.argmax(f1s[:-1]))])
+    return model, list(X.columns), threshold, auc
 
 
-model, SCHEMA, METRICS = load_artifacts()
-THRESHOLD = SCHEMA.get("threshold", 0.5)
-best_auc = METRICS.get("comparison", {}).get(METRICS.get("best_model", ""), {}).get("roc_auc", 0.847)
+@st.cache_data
+def load_metrics():
+    p = os.path.join(MODELS_DIR, "metrics.json")
+    if os.path.exists(p):
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+
+model, COLUMNS, THRESHOLD, AUC = train()
+METRICS = load_metrics()
 
 st.title("📉 Prédiction du churn client")
 st.caption(
     f"Estime la probabilité qu'un client résilie son abonnement télécom. "
-    f"Modèle : **XGBoost tuné** · ROC-AUC **{best_auc:.2f}** · seuil de décision **{THRESHOLD:.2f}**."
+    f"Modèle : **Random Forest** · ROC-AUC **{AUC:.2f}** · seuil de décision **{THRESHOLD:.2f}**."
 )
 
 tab_pred, tab_perf = st.tabs(["🔮 Prédiction", "📊 Performance du modèle"])
 
 with tab_pred:
     c1, c2, c3 = st.columns(3)
-
     with c1:
         st.subheader("👤 Profil")
         gender = st.selectbox("Genre", ["Female", "Male"])
@@ -57,7 +87,6 @@ with tab_pred:
         partner = st.selectbox("En couple", ["No", "Yes"])
         dependents = st.selectbox("Personnes à charge", ["No", "Yes"])
         tenure = st.slider("Ancienneté (mois)", 0, 72, 12)
-
     with c2:
         st.subheader("🌐 Services")
         internet = st.selectbox("Internet", ["DSL", "Fiber optic", "No"])
@@ -74,7 +103,6 @@ with tab_pred:
         tech = net_opt("Support technique")
         tv = net_opt("Streaming TV")
         movies = net_opt("Streaming films")
-
     with c3:
         st.subheader("💳 Contrat & facturation")
         contract = st.selectbox("Contrat", ["Month-to-month", "One year", "Two year"])
@@ -98,7 +126,7 @@ with tab_pred:
             "PaperlessBilling": paperless, "PaymentMethod": payment,
             "MonthlyCharges": monthly, "TotalCharges": total,
         }
-        X = pd.DataFrame([client])[SCHEMA["columns"]]
+        X = pd.DataFrame([client])[COLUMNS]
         proba = float(model.predict_proba(X)[0, 1])
         churn = proba >= THRESHOLD
 
@@ -116,9 +144,7 @@ with tab_pred:
                 st.error(f"⚠️ Client À RISQUE (≥ seuil {THRESHOLD:.0%}) — action de rétention recommandée.")
             else:
                 st.success(f"✅ Client peu susceptible de partir (< seuil {THRESHOLD:.0%}).")
-
         with r2:
-            # Facteurs de risque détectés (règles métier interprétables)
             factors = []
             if contract == "Month-to-month":
                 factors.append("Contrat au mois (sans engagement) → proposer un contrat 1 ou 2 ans avec avantage.")
@@ -134,7 +160,6 @@ with tab_pred:
                 factors.append("Paiement par chèque électronique → orienter vers le prélèvement automatique.")
             if monthly > 85:
                 factors.append("Charge mensuelle élevée → risque de sensibilité au prix.")
-
             st.markdown("**🎯 Facteurs de risque & rétention**")
             if factors:
                 for f in factors:
@@ -143,17 +168,17 @@ with tab_pred:
                 st.markdown("- Profil stable : peu de leviers de churn identifiés. 👍")
 
 with tab_perf:
-    st.subheader("Comparaison des modèles")
+    st.subheader("Comparaison des modèles (étude complète)")
     comp = METRICS.get("comparison", {})
     if comp:
         rows = [{
             "Modèle": n.replace("_", " ").title(),
-            "ROC-AUC": round(m["roc_auc"], 3),
-            "Recall": round(m["recall"], 3),
-            "Précision": round(m["precision"], 3),
-            "F1": round(m["f1"], 3),
+            "ROC-AUC": round(m["roc_auc"], 3), "Recall": round(m["recall"], 3),
+            "Précision": round(m["precision"], 3), "F1": round(m["f1"], 3),
         } for n, m in sorted(comp.items(), key=lambda kv: -kv[1]["roc_auc"])]
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+        st.caption("Le meilleur modèle en étude est XGBoost tuné (ROC-AUC 0,847). "
+                   "L'app déploie un Random Forest équivalent, entraîné au démarrage.")
 
     st.info(
         "En rétention, on privilégie le **recall** (détecter un maximum de churners). "
@@ -163,13 +188,11 @@ with tab_perf:
     )
 
     col1, col2 = st.columns(2)
-    for col, img, cap in [
-        (col1, "roc_curves.png", "Courbes ROC"),
-        (col2, "confusion_matrix.png", "Matrice de confusion (seuil optimal)"),
-    ]:
-        path = os.path.join(REPORTS_DIR, img)
-        if os.path.exists(path):
-            col.image(path, caption=cap, use_container_width=True)
+    for col, img, cap in [(col1, "roc_curves.png", "Courbes ROC (étude)"),
+                          (col2, "confusion_matrix.png", "Matrice de confusion (étude)")]:
+        p = os.path.join(REPORTS_DIR, img)
+        if os.path.exists(p):
+            col.image(p, caption=cap, use_container_width=True)
 
 st.divider()
 st.caption("Alexis Clerc · [GitHub](https://github.com/2Alexis) · [Portfolio](https://alexis-clerc.fr)")

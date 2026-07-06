@@ -1,0 +1,6 @@
+# Développement : entraînement complet (tuning, SMOTE, sauvegarde) via src/train_model.py
+-r requirements.txt
+xgboost>=2.0
+imbalanced-learn>=0.12
+matplotlib>=3.8
+joblib>=1.3
