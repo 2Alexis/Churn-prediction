@@ -28,6 +28,36 @@ REPORTS_DIR = os.path.join(ROOT, "reports")
 
 st.set_page_config(page_title="Prédiction de churn", page_icon="📉", layout="wide")
 
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap');
+.stApp {
+    background:
+      radial-gradient(1100px 550px at 12% -10%, rgba(0,180,216,.10), transparent 60%),
+      radial-gradient(900px 480px at 92% 6%, rgba(123,47,247,.12), transparent 55%),
+      linear-gradient(160deg,#0a0f1f 0%,#0b1226 55%,#0a0a1a 100%);
+}
+#MainMenu, header, footer {visibility:hidden;}
+html, body, [class*="css"] {font-family:'Inter',sans-serif;}
+.hero {text-align:center; padding:1.2rem 1rem .3rem;}
+.hero .badge {display:inline-block; font-size:.72rem; letter-spacing:2px; text-transform:uppercase;
+    color:#22d3ee; border:1px solid rgba(34,211,238,.35); border-radius:999px; padding:.3rem .95rem;
+    margin-bottom:.9rem; background:rgba(34,211,238,.06);}
+.hero h1 {font-size:2.9rem; font-weight:800; margin:.1rem 0;
+    background:linear-gradient(110deg,#22d3ee,#4ea8ff 45%,#b06bff);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;}
+.hero p {color:#93a4c9; font-size:1.02rem; max-width:720px; margin:.35rem auto 0;}
+.stButton > button {background:linear-gradient(120deg,#00b4d8,#7b2ff7)!important; color:#fff!important;
+    font-weight:700!important; border:none!important; border-radius:12px!important;}
+.stButton > button:hover {filter:brightness(1.1); box-shadow:0 6px 22px rgba(123,47,247,.4);}
+[data-testid="stMetric"] {background:rgba(255,255,255,.03); border:1px solid rgba(34,211,238,.18);
+    border-radius:16px; padding:1rem 1.1rem;}
+.stTabs [aria-selected="true"] {color:#22d3ee !important;}
+.stProgress > div > div > div {background:linear-gradient(90deg,#00b4d8,#7b2ff7)!important;}
+hr {border-color:rgba(34,211,238,.15);}
+</style>
+""", unsafe_allow_html=True)
+
 NUMERIC = ["tenure", "MonthlyCharges", "TotalCharges", "SeniorCitizen"]
 
 
@@ -70,11 +100,14 @@ def load_metrics():
 model, COLUMNS, THRESHOLD, AUC = train()
 METRICS = load_metrics()
 
-st.title("📉 Prédiction du churn client")
-st.caption(
-    f"Estime la probabilité qu'un client résilie son abonnement télécom. "
-    f"Modèle : **Random Forest** · ROC-AUC **{AUC:.2f}** · seuil de décision **{THRESHOLD:.2f}**."
-)
+st.markdown(f"""
+<div class="hero">
+    <span class="badge">📉 Machine Learning · Rétention client</span>
+    <h1>Prédiction du churn client</h1>
+    <p>Estime la probabilité qu'un client résilie son abonnement télécom, pour cibler
+    les actions de rétention. Modèle Random Forest · ROC-AUC {AUC:.2f} · seuil {THRESHOLD:.2f}.</p>
+</div>
+""", unsafe_allow_html=True)
 
 tab_pred, tab_perf = st.tabs(["🔮 Prédiction", "📊 Performance du modèle"])
 
